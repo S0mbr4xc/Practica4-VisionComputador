@@ -1,0 +1,15 @@
+"C:\Program Files\JetBrains\CLion 2024.3.4\bin\cmake\win\x64\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_MAKE_PROGRAM=C:/Program Files/JetBrains/CLion 2024.3.4/bin/ninja/win/x64/ninja.exe" -G Ninja -S "C:\Users\s3_xc\OneDrive - Universidad Politecnica Salesiana\Uni\Programacion\Vision del computador\Practica4\C++" -B "C:\Users\s3_xc\OneDrive - Universidad Politecnica Salesiana\Uni\Programacion\Vision del computador\Practica4\C++\cmake-build-debug"
+-- OpenCV ARCH: x64
+-- OpenCV RUNTIME: mingw
+-- OpenCV STATIC: OFF
+CMake Error at C:/Program Files/JetBrains/CLion 2024.3.4/bin/cmake/win/x64/share/cmake-3.30/Modules/FindPackageHandleStandardArgs.cmake:233 (message):
+  Could NOT find OpenCV (missing: cudaimgproc cudafilters) (found version
+  "4.5.5")
+Call Stack (most recent call first):
+  C:/Program Files/JetBrains/CLion 2024.3.4/bin/cmake/win/x64/share/cmake-3.30/Modules/FindPackageHandleStandardArgs.cmake:603 (_FPHSA_FAILURE_MESSAGE)
+  C:/opencv/x64/mingw/lib/OpenCVConfig.cmake:354 (find_package_handle_standard_args)
+  C:/opencv/OpenCVConfig.cmake:174 (include)
+  CMakeLists.txt:7 (find_package)
+
+
+-- Configuring incomplete, errors occurred!

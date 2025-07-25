@@ -1,0 +1,3 @@
+C:/Users/s3_xc/OneDrive - Universidad Politecnica Salesiana/Uni/Programacion/Vision del computador/Practica4/C++/cmake-build-debug/CMakeFiles/C__.dir
+C:/Users/s3_xc/OneDrive - Universidad Politecnica Salesiana/Uni/Programacion/Vision del computador/Practica4/C++/cmake-build-debug/CMakeFiles/edit_cache.dir
+C:/Users/s3_xc/OneDrive - Universidad Politecnica Salesiana/Uni/Programacion/Vision del computador/Practica4/C++/cmake-build-debug/CMakeFiles/rebuild_cache.dir
