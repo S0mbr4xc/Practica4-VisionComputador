@@ -1,82 +1,104 @@
 #include <opencv2/opencv.hpp>
-#include <opencv2/cudafilters.hpp>       // GaussianFilter, MorphologyFilter
-#include <opencv2/cudaimgproc.hpp>       // CannyEdgeDetector, cvtColor, equalizeHist
-#include <filesystem>
+#include <opencv2/dnn.hpp>
 #include <chrono>
 #include <iostream>
-
-namespace fs = std::filesystem;
+#include <vector>
 using Clock = std::chrono::high_resolution_clock;
 
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cout << "Uso: " << argv[0] << " <carpeta_imágenes>" << std::endl;
+// Ajustes de detección
+const float CONF_THRESHOLD = 0.25f;
+const float NMS_THRESHOLD  = 0.45f;
+const cv::Size  INPUT_SIZE   = cv::Size(640, 640);
+const std::vector<std::string> CLASS_NAMES = {
+    /* 0: "А", 1: "Б", … 32: "Я" */
+};
+
+int main() {
+    // Carga de modelo ONNX exportado de YOLOv8
+    cv::dnn::Net net = cv::dnn::readNetFromONNX("best.onnx");
+    // Usa CUDA si está disponible
+    net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+    net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA_FP16);
+
+    // Abre video
+    cv::VideoCapture cap("input.mp4");
+    if (!cap.isOpened()) {
+        std::cerr << "Error al abrir video" << std::endl;
         return -1;
     }
-    std::string input_dir = argv[1];
+    int width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    double fps  = cap.get(cv::CAP_PROP_FPS);
+    fps = (fps > 0 ? fps : 30.0);
 
-    std::vector<std::string> files;
-    for (auto& p : fs::directory_iterator(input_dir)) {
-        if (p.is_regular_file())
-            files.push_back(p.path().string());
+    cv::VideoWriter writer("output_detect.mp4",
+        cv::VideoWriter::fourcc('m','p','4','v'),
+        fps, cv::Size(width, height));
+
+    cv::Mat frame;
+    while (cap.read(frame)) {
+        if (frame.empty()) break;
+
+        // Preprocesamiento
+        cv::Mat blob;
+        cv::dnn::blobFromImage(frame, blob, 1/255.f, INPUT_SIZE, cv::Scalar(), true, false);
+        net.setInput(blob);
+
+        // Forward
+        std::vector<cv::Mat> outputs;
+        net.forward(outputs, net.getUnconnectedOutLayersNames());
+
+        // Postprocesamiento
+        std::vector<int> classIds;
+        std::vector<float> confidences;
+        std::vector<cv::Rect> boxes;
+        float* data = reinterpret_cast<float*>(outputs[0].data);
+        const int dimensions = outputs[0].size[2];   // 85
+        const int rows       = outputs[0].size[1];   // N detecciones
+        for (int i = 0; i < rows; ++i) {
+            float conf = data[4];
+            if (conf >= CONF_THRESHOLD) {
+                // Encuentra la clase de mayor confianza
+                cv::Mat scores(1, dimensions - 5, CV_32FC1, data + 5);
+                cv::Point classIdPoint;
+                double maxClassScore;
+                minMaxLoc(scores, 0, &maxClassScore, 0, &classIdPoint);
+                if (maxClassScore > CONF_THRESHOLD) {
+                    float cx = data[0] * frame.cols;
+                    float cy = data[1] * frame.rows;
+                    float w  = data[2] * frame.cols;
+                    float h  = data[3] * frame.rows;
+                    int left   = static_cast<int>(cx - w / 2);
+                    int top    = static_cast<int>(cy - h / 2);
+                    classIds.push_back(classIdPoint.x);
+                    confidences.push_back(static_cast<float>(maxClassScore));
+                    boxes.emplace_back(left, top, static_cast<int>(w), static_cast<int>(h));
+                }
+            }
+            data += dimensions;
+        }
+        // NMS
+        std::vector<int> indices;
+        cv::dnn::NMSBoxes(boxes, confidences, CONF_THRESHOLD, NMS_THRESHOLD, indices);
+
+        // Dibujar cuadros
+        for (int idx : indices) {
+            cv::Rect box = boxes[idx];
+            cv::rectangle(frame, box, cv::Scalar(0, 255, 0), 2);
+            std::string label = CLASS_NAMES[classIds[idx]] +
+                                ": " + cv::format("%.2f", confidences[idx]);
+            cv::putText(frame, label, box.tl(), cv::FONT_HERSHEY_SIMPLEX, 0.8,
+                        cv::Scalar(0,255,0), 2);
+        }
+
+        // Mostrar y guardar
+        cv::imshow("Detección YOLO", frame);
+        writer.write(frame);
+        if (cv::waitKey(1) == 27) break;
     }
-    if (files.empty()) {
-        std::cerr << "No se hallaron imágenes en " << input_dir << std::endl;
-        return -1;
-    }
 
-    double cpu_total = 0.0, gpu_total = 0.0;
-    int count = 0;
-
-    // Crear objetos de filtro CUDA\
-    cv::Ptr<cv::cuda::Filter> gauss_gpu = cv::cuda::createGaussianFilter(
-        CV_8UC3, CV_8UC3, cv::Size(5,5), 1.5);
-    cv::Ptr<cv::cuda::Filter> erode_gpu = cv::cuda::createMorphologyFilter(
-        cv::MORPH_ERODE, CV_8UC1,
-        cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3)));
-    cv::Ptr<cv::cuda::Filter> dilate_gpu = cv::cuda::createMorphologyFilter(
-        cv::MORPH_DILATE, CV_8UC1,
-        cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3)));
-    cv::Ptr<cv::cuda::CannyEdgeDetector> canny_gpu =
-        cv::cuda::createCannyEdgeDetector(50.0, 150.0);
-
-    for (const auto& file : files) {
-        cv::Mat img = cv::imread(file);
-        if (img.empty()) continue;
-
-        // --- CPU pipeline ---
-        auto t0 = Clock::now();
-        cv::Mat blur_cpu, gray_cpu, erode_cpu, dilate_cpu, edges_cpu, eq_cpu;
-        cv::GaussianBlur(img, blur_cpu, cv::Size(5,5), 1.5);
-        cv::cvtColor(blur_cpu, gray_cpu, cv::COLOR_BGR2GRAY);
-        cv::erode(gray_cpu, erode_cpu,
-                  cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3)));
-        cv::dilate(erode_cpu, dilate_cpu,
-                   cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3,3)));
-        cv::Canny(dilate_cpu, edges_cpu, 50, 150);
-        cv::equalizeHist(gray_cpu, eq_cpu);
-        auto t1 = Clock::now();
-        cpu_total += std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-        // --- GPU pipeline ---
-        t0 = Clock::now();
-        cv::cuda::GpuMat gimg(img), gblur, ggray, gerode, gdilate, gedges, geq;
-        gauss_gpu->apply(gimg, gblur);
-        cv::cuda::cvtColor(gblur, ggray, cv::COLOR_BGR2GRAY);
-        erode_gpu->apply(ggray, gerode);
-        dilate_gpu->apply(gerode, gdilate);
-        canny_gpu->detect(gdilate, gedges);
-        cv::cuda::equalizeHist(ggray, geq);
-        auto t2 = Clock::now();
-        gpu_total += std::chrono::duration<double, std::milli>(t2 - t0).count();
-
-        count++;
-    }
-
-    std::cout << "Procesadas " << count << " imágenes." << std::endl;
-    std::cout << "Tiempo promedio CPU: " << (cpu_total/count)
-              << " ms/frame" << std::endl;
-    std::cout << "Tiempo promedio GPU: " << (gpu_total/count)
-              << " ms/frame" << std::endl;
+    cap.release();
+    writer.release();
+    cv::destroyAllWindows();
     return 0;
 }

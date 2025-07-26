@@ -1,0 +1,8 @@
+*.pt
+*.onnx
+*.weights
+*.yaml
+*.mp4
+*.png
+dataset/
+runs/
